@@ -344,10 +344,12 @@ done
 # patch_mouse.py adds 1002 alongside 1003. Independent bits, so terminals that
 # honour 1003 lose nothing, and copilot's own MOUSE_OFF already sends 1002l so
 # the terminal is not left reporting mouse events after exit. Re-applied here
-# because npm restores a pristine app.js on every upgrade.
+# because npm restores the UI bundle on every upgrade.
 patch_mouse_js() {
-    local app="$1"
+    # 1.0.97's app.js is a bootstrap; the mouse constants moved to cli-main.js.
+    local app="$1/cli-main.js"
     [ -f "$PATCH_MOUSE_PY" ] || return 0
+    [ -f "$app" ] || app="$1/app.js"
     [ -f "$app" ] || return 0
     python3 "$PATCH_MOUSE_PY" "$app" >/dev/null 2>&1 || \
         warn "WARN: mouse-scroll patch did not apply to $app (upstream constant changed?) - swipe may fall back to arrow keys"
@@ -396,11 +398,11 @@ if [ -f "$MUSL_PKG/index.js" ]; then
             exit 1
         fi
     fi
-    patch_mouse_js "$MUSL_PKG/app.js"
+    patch_mouse_js "$MUSL_PKG"
     ENTRY="$MUSL_PKG/index.js"
 elif [ -f "$LEGACY_PKG/index.js" ]; then
     legacy_selfheal
-    patch_mouse_js "$LEGACY_PKG/app.js"
+    patch_mouse_js "$LEGACY_PKG"
     if [ -f "$LEGACY_PKG/npm-loader.js" ]; then
         ENTRY="$LEGACY_PKG/npm-loader.js"
     else

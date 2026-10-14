@@ -306,7 +306,14 @@ Termux does activate tracking on 1002 and does not on 1003.
 so terminals that honour 1003 lose nothing, and copilot's own `MOUSE_OFF`
 already sends `1002l`, so the terminal is not left reporting mouse events after
 exit. The wrapper re-applies it on every launch, because npm restores a pristine
-`app.js` on each upgrade.
+UI bundle on each upgrade.
+
+In 1.0.97, `app.js` is a bootstrap that imports `cli-main.js`; the mouse constants
+are in `cli-main.js`, and the existing patch still matches them. The wrapper now
+targets that file when present, falling back to `app.js` for older layouts. If an
+older wrapper warns that the mouse patch did not apply to `app.js`, update your
+clone and refresh the launcher (or rerun the full `./setup.sh`). A genuine
+constant mismatch still produces a warning rather than silently claiming success.
 
 Verify what copilot actually asks for:
 

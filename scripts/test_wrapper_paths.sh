@@ -46,6 +46,10 @@ patchelf() {
 }
 
 python3() {
+  if [ "$1" = "$HOME/.copilot-versions/shim/patch_mouse.py" ]; then
+    command python "$@"
+    return $?
+  fi
   if [ "$1" = "-c" ]; then
     test "$3" = "$NPM_TEST_ROOT/@github/copilot-linuxmusl-arm64/package.json" || return 1
     echo "1.0.97"
@@ -97,7 +101,7 @@ run_case() (
       : > "$HOME/.copilot-versions/shim/extract_sea.py"
       expected_entry="$HOME/.copilot-versions/sea-1.0.97/index.js"
       ;;
-    custom-split)
+    custom-split|mouse-split-ui|mouse-changed-ui)
       export NPM_TEST_ROOT="$HOME/custom npm/lib/node_modules"
       package="$NPM_TEST_ROOT/@github/copilot-linuxmusl-arm64"
       mkdir -p "$package/prebuilds/linuxmusl-arm64"
@@ -131,7 +135,7 @@ run_case() (
       esac
       expected_entry="$cached_app/index.js"
       ;;
-    home-legacy)
+    home-legacy|mouse-legacy-ui)
       export NPM_TEST_ROOT="$HOME/.npm-global/lib/node_modules"
       package="$NPM_TEST_ROOT/@github/copilot"
       mkdir -p "$package"
@@ -152,6 +156,26 @@ run_case() (
       ;;
   esac
 
+  case "$scenario" in
+    mouse-*)
+      mkdir -p "$HOME/.copilot-versions/shim"
+      cp "$REPO_ROOT/shim/patch_mouse.py" "$HOME/.copilot-versions/shim/"
+      if [ "$scenario" = "mouse-legacy-ui" ]; then
+        mouse_bundle="$package/app.js"
+      else
+        mouse_bundle="$package/cli-main.js"
+        echo 'await import("./cli-main.js");' > "$package/app.js"
+        cp "$package/app.js" "$case_root/bootstrap.js"
+      fi
+      if [ "$scenario" = "mouse-changed-ui" ]; then
+        echo 'const modes = {};' > "$mouse_bundle"
+      else
+        printf '%s\n' 'const modes={MOUSE_ANY:"\x1B[?1003h\x1B[?1006h"};' > "$mouse_bundle"
+      fi
+      cp "$mouse_bundle" "$case_root/original-ui.js"
+      ;;
+  esac
+
   if bash "$REPO_ROOT/scripts/copilot-wrapper.sh" -p "hello world" \
       > "$case_root/wrapper.log" 2>&1; then
     case "$scenario" in
@@ -164,6 +188,30 @@ run_case() (
     printf '%s\n' /data/data/com.termux/files/usr/bin/node \
       "$expected_entry" -p "hello world" > "$case_root/expected.log"
     cmp "$case_root/expected.log" "$EXEC_LOG"
+    case "$scenario" in
+      mouse-changed-ui)
+        command grep -qF "mouse-scroll patch did not apply to $mouse_bundle" "$case_root/wrapper.log"
+        cmp "$case_root/original-ui.js" "$mouse_bundle"
+        cmp "$case_root/bootstrap.js" "$package/app.js"
+        ;;
+      mouse-split-ui|mouse-legacy-ui)
+        command python "$REPO_ROOT/shim/patch_mouse.py" "$mouse_bundle" --check
+        if command grep -q "mouse-scroll patch did not apply" "$case_root/wrapper.log"; then
+          cat "$case_root/wrapper.log" >&2
+          exit 1
+        fi
+        cp "$mouse_bundle" "$case_root/patched-ui.js"
+        if ! bash "$REPO_ROOT/scripts/copilot-wrapper.sh" -p "hello world" \
+            > "$case_root/relaunch.log" 2>&1; then
+          cat "$case_root/relaunch.log" >&2
+          exit 1
+        fi
+        cmp "$case_root/patched-ui.js" "$mouse_bundle"
+        if [ "$scenario" = "mouse-split-ui" ]; then
+          cmp "$case_root/bootstrap.js" "$package/app.js"
+        fi
+        ;;
+    esac
     if [ "$scenario" = "missing-math" ] || [ "$scenario" = "unpatched-sea" ]; then
       for module in runtime cli-native; do
         for lib in libm.so libdl.so libgai_xlate.so libpthread_xlate.so; do
@@ -202,7 +250,8 @@ run_case() (
 )
 
 for scenario in default-sea custom-split home-legacy npm-failure npm-empty missing-entry \
-                unpatched-sea missing-math patch-failure patch-noop; do
+                unpatched-sea missing-math patch-failure patch-noop \
+                mouse-split-ui mouse-legacy-ui mouse-changed-ui; do
   run_case "$scenario"
   echo "PASS: $scenario"
 done

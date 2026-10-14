@@ -20,6 +20,8 @@ MOUSE_OFF already sends 1002l, so teardown stays symmetric and the terminal is
 not left reporting mouse events after exit.
 
 Idempotent: safe to re-run, and re-run by the wrapper after every npm upgrade.
+Pass the UI bundle: cli-main.js in the 1.0.97 split layout, or app.js in older
+layouts. The wrapper selects the file before invoking this script.
 Exit 0 = patched or already patched, 2 = target string not found (upstream
 changed the constant; re-check before trusting mouse scrolling).
 """
@@ -30,11 +32,11 @@ PATCHED = r'MOUSE_ANY:"\x1B[?1002h\x1B[?1003h\x1B[?1006h"'
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: patch_mouse.py <app.js> [--check]", file=sys.stderr)
+        print("usage: patch_mouse.py <bundle.js> [--check]", file=sys.stderr)
         return 2
     path = sys.argv[1]
     check = "--check" in sys.argv
-    with open(path, encoding="utf8", errors="surrogateescape") as fh:
+    with open(path, encoding="utf8", errors="surrogateescape", newline="") as fh:
         s = fh.read()
 
     if PATCHED in s:
@@ -49,7 +51,7 @@ def main():
     if check:
         print("not patched (would patch 1 occurrence)")
         return 1
-    with open(path, "w", encoding="utf8", errors="surrogateescape") as fh:
+    with open(path, "w", encoding="utf8", errors="surrogateescape", newline="") as fh:
         fh.write(s.replace(ORIG, PATCHED))
     print("patched: any-event mouse now requests 1002 as well as 1003")
     return 0
