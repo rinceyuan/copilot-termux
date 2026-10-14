@@ -92,6 +92,7 @@ STUB_PKG="$NODE_MODULES/@github/copilot"
 ARCH_SUFFIX="arm64"
 MUSL_PKG="$NODE_MODULES/@github/copilot-linuxmusl-$ARCH_SUFFIX"
 LEGACY_PKG="$STUB_PKG"
+MUSL_NEEDED_LIBS="libm.so libdl.so libgai_xlate.so libpthread_xlate.so"
 
 LIBUNWIND="/data/data/com.termux/files/usr/lib/libunwind.a"
 PTY_BACKUP_DIR="$HOME/.copilot-termux-backups"
@@ -169,7 +170,7 @@ build_translator() {
 patch_one_node() {
     # $1 = path to a musl-built .node module. Idempotent: rename_imports.py
     # verifies the exact expected bytes and refuses to double-apply, and
-    # patchelf --add-needed is a no-op when the entry already exists.
+    # existing DT_NEEDED entries are checked to avoid duplicates.
     local elf="$1" syms
     [ -f "$elf" ] || return 0          # module absent in this version, fine
     syms="$(imported_xlate_syms "$elf")"
@@ -197,13 +198,22 @@ patch_one_node() {
     fi
     # patchelf --add-needed does NOT deduplicate, so check first. A duplicate
     # DT_NEEDED is harmless at runtime but grows on every launch.
-    local needed
-    needed=$(readelf -d "$elf" 2>/dev/null | command grep NEEDED)
-    for lib in libm.so libdl.so libgai_xlate.so libpthread_xlate.so; do
+    local needed lib
+    needed=$(readelf -d "$elf") || {
+        warn "ERROR: could not inspect native dependencies in $elf"
+        return 1
+    }
+    for lib in $MUSL_NEEDED_LIBS; do
         printf '%s\n' "$needed" | command grep -qF "[$lib]" || \
-            patchelf --add-needed "$lib" "$elf" 2>/dev/null
+            patchelf --add-needed "$lib" "$elf" || {
+                warn "ERROR: could not add $lib to $elf"
+                return 1
+            }
     done
-    patchelf --set-rpath '$ORIGIN' "$elf" 2>/dev/null
+    patchelf --set-rpath '$ORIGIN' "$elf" || {
+        warn "ERROR: could not set the native library search path in $elf"
+        return 1
+    }
     return 0
 }
 
@@ -213,7 +223,10 @@ patch_musl_runtime() {
     [ -f "$RENAME_PY" ] || { warn "missing $RENAME_PY"; return 1; }
     [ -f "$dir/runtime.node" ] || return 1
 
-    cp -f "$GAI_LIB" "$PTH_LIB" "$dir/" 2>/dev/null
+    cp -f "$GAI_LIB" "$PTH_LIB" "$dir/" || {
+        warn "ERROR: could not install translator libraries into $dir"
+        return 1
+    }
 
     # EVERY musl .node in the dir needs this, not just runtime.node.
     # cli-native.node drives the TUI and imports pthread_mutexattr_* AND
@@ -226,18 +239,21 @@ patch_musl_runtime() {
     done
 
     # detect-libc says "glibc" on bionic, so the loader looks in linux-arm64.
-    ln -sfn "linuxmusl-$ARCH_SUFFIX" "$MUSL_PKG/prebuilds/linux-$ARCH_SUFFIX" 2>/dev/null
+    ln -sfn "linuxmusl-$ARCH_SUFFIX" "$MUSL_PKG/prebuilds/linux-$ARCH_SUFFIX" || rc=1
     return $rc
 }
 
 runtime_is_patched() {
-    # Every .node in the dir must carry the translator, and none may still have
-    # an un-renamed attr import. Either condition failing triggers a re-patch.
-    local dir="$MUSL_PKG/prebuilds/linuxmusl-$ARCH_SUFFIX" f
+    # A translator alone does not prove a complete patch: libm.so is required
+    # for math imports such as cli-native.node's expf on bionic.
+    local dir="$MUSL_PKG/prebuilds/linuxmusl-$ARCH_SUFFIX" f needed lib
     [ -f "$dir/runtime.node" ] || return 1
     for f in "$dir"/*.node; do
         [ -f "$f" ] || continue
-        readelf -d "$f" 2>/dev/null | command grep -q 'libpthread_xlate\.so' || return 1
+        needed=$(readelf -d "$f" 2>/dev/null) || return 1
+        for lib in $MUSL_NEEDED_LIBS; do
+            printf '%s\n' "$needed" | command grep -qF "[$lib]" || return 1
+        done
         readelf --dyn-syms -W "$f" 2>/dev/null | command grep ' UND ' | awk '{print $8}' \
             | command grep -q -e '^pthread_mutexattr' -e '^pthread_condattr' \
                               -e '^atexit$' -e '^atexit@' -e '^sigaction$' -e '^sigaction@' && return 1
@@ -374,8 +390,12 @@ fi
 ENTRY=""
 if [ -f "$MUSL_PKG/index.js" ]; then
     # 1.0.73+ split package. Re-patch if npm replaced the runtime.
-    runtime_is_patched || patch_musl_runtime || \
-        warn "WARN: could not patch $MUSL_PKG runtime.node - expect a segfault"
+    if ! runtime_is_patched; then
+        if ! patch_musl_runtime || ! runtime_is_patched; then
+            warn "ERROR: native runtime patch is incomplete for $MUSL_PKG; refusing to start."
+            exit 1
+        fi
+    fi
     patch_mouse_js "$MUSL_PKG/app.js"
     ENTRY="$MUSL_PKG/index.js"
 elif [ -f "$LEGACY_PKG/index.js" ]; then

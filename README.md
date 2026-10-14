@@ -183,6 +183,25 @@ Run `bash scripts/test_wrapper_paths.sh` for isolated package-discovery checks
 covering SEA, split and legacy layouts. These mock native execution and do not
 verify Android runtime compatibility.
 
+### `cli-native.node`: `cannot locate symbol "expf"`
+
+This is a dynamic-linker failure, not a missing JavaScript entry point.
+The ARM64 musl addon imports `expf`, which Android provides in `libm.so`.
+Check the first failure in the loader's list: the later `Cannot find module`
+messages describe fallback paths and can hide the useful error above them.
+
+An incomplete patch can contain `libpthread_xlate.so` while still missing
+`libm.so`. Older launchers treated the translator dependency alone as proof that
+patching was complete. The launcher now checks all required libraries on every
+`.node` file, repairs missing dependencies, and verifies the result before
+starting Copilot. Failed patch commands stop startup instead of being ignored.
+
+Update your clone and refresh the launcher as described above, or rerun the full
+`./setup.sh`. On the next launch, existing SEA extraction directories are checked
+too; deleting them is not required. These dependency checks do not establish
+full Android compatibility if the library is already present but loading still
+fails. A mouse-scroll patch warning is separate from this startup error.
+
 ### "Cannot find native binding"
 The native runtime patch wasn't applied. Run:
 ```bash
