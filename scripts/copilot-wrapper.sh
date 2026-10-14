@@ -80,7 +80,14 @@ PATCH_JS_PY="$SHIM_DIR/patch_js.py"
 PATCH_MOUSE_PY="$SHIM_DIR/patch_mouse.py"
 EXTRACT_SEA_PY="$SHIM_DIR/extract_sea.py"
 
-NODE_MODULES="$HOME/.npm-global/lib/node_modules"
+warn() { echo "[copilot-wrapper] $*" >&2; }
+
+# Match setup.sh for both Termux's default prefix and custom npm prefixes.
+if ! NODE_MODULES="$(npm root -g)" || [ -z "$NODE_MODULES" ]; then
+    warn "ERROR: could not determine npm global modules directory."
+    warn "       Check npm root -g and your npm configuration."
+    exit 1
+fi
 STUB_PKG="$NODE_MODULES/@github/copilot"
 ARCH_SUFFIX="arm64"
 MUSL_PKG="$NODE_MODULES/@github/copilot-linuxmusl-$ARCH_SUFFIX"
@@ -128,8 +135,6 @@ imported_xlate_syms() {
         fi
     done
 }
-
-warn() { echo "[copilot-wrapper] $*" >&2; }
 
 build_shim() {
     [ -f "$SHIM_SRC" ] || return 1

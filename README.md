@@ -115,6 +115,11 @@ The musl `.node` binary expects `libm` to be part of libc (as musl bundles it). 
 
 ## File Layout
 
+The global package paths below use `~/.npm-global/lib/node_modules` as an example.
+Use the directory printed by `npm root -g` for your installation; the launcher
+detects this directory automatically, including Termux's default
+`$PREFIX/lib/node_modules`.
+
 ```
 ~/.npm-global/lib/node_modules/@github/copilot/
 ├── prebuilds/android-arm64/pty.node       ← Built by setup, restored on update
@@ -150,6 +155,33 @@ backup). Update your clone to include this fix and rerun the full `./setup.sh`;
 The isolated path regression checks can be run with
 `bash scripts/test_setup_paths.sh`. They mock package installation and compilation;
 they do not verify native runtime compatibility on Android.
+
+### "[copilot-wrapper] ERROR: no copilot entry point found"
+
+Older launchers always searched `~/.npm-global/lib/node_modules`, even when setup
+installed Copilot into `$PREFIX/lib/node_modules` or another configured npm
+prefix. Check `npm root -g`: if it differs from the paths in the error, refresh
+the launcher after updating your clone to include the fix:
+
+```bash
+cd ~/copilot-termux &&
+git pull --ff-only &&
+mkdir -p "$HOME/.local/bin" &&
+cp scripts/copilot-wrapper.sh "$HOME/.local/bin/copilot" &&
+chmod +x "$HOME/.local/bin/copilot" &&
+hash -r &&
+copilot
+```
+
+There is no need to rebuild native dependencies for this path fix. Do not rely
+on `./setup.sh --update` to refresh the launcher when the CLI is already current:
+that mode can exit before copying it. The launcher now uses `npm root -g` for
+both the loader and platform package, and reports npm discovery failures
+explicitly rather than guessing a directory.
+
+Run `bash scripts/test_wrapper_paths.sh` for isolated package-discovery checks
+covering SEA, split and legacy layouts. These mock native execution and do not
+verify Android runtime compatibility.
 
 ### "Cannot find native binding"
 The native runtime patch wasn't applied. Run:
