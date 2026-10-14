@@ -135,6 +135,22 @@ The musl `.node` binary expects `libm` to be part of libc (as musl bundles it). 
 
 ## Troubleshooting
 
+### "Repo's shim/bionic_shim.c not found" under the npm directory
+
+If the error points to `.../node_modules/@github/copilot/shim/` even though
+`shim/bionic_shim.c` exists in your clone, an older `setup.sh` resolved its
+repository path after changing into the npm installation directory. This is an
+installer path bug, not evidence of an incompatible Copilot version.
+
+The script now resolves the repository path once at startup, before any `cd`,
+for both full installation and `--update` (including a missing `pty.node`
+backup). Update your clone to include this fix and rerun the full `./setup.sh`;
+`--update` can exit early when the CLI is already up to date.
+
+The isolated path regression checks can be run with
+`bash scripts/test_setup_paths.sh`. They mock package installation and compilation;
+they do not verify native runtime compatibility on Android.
+
 ### "Cannot find native binding"
 The native runtime patch wasn't applied. Run:
 ```bash

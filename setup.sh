@@ -9,6 +9,9 @@ fi
 set -e  # Exit on error
 set -u  # Exit on undefined variable
 
+# Resolve once before either install path changes the working directory.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Detect architecture for Android platform string
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -234,7 +237,6 @@ if [ "$UPDATE_MODE" = true ]; then
 
   # ---- Sync shim sources from repo (so `git pull && ./setup.sh --update` picks
   #      up new symbol forwarders when upstream copilot adds glibc probes) ----
-  REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   mkdir -p "$SHIM_DIR"
   # gai_xlate.c/pthread_xlate.c/rename_imports.py are what fix the 1.0.61+ and
   # TUI segfaults - without them the wrapper cannot self-heal at all.
@@ -931,9 +933,6 @@ ensure_pkg ndk-sysroot   # for /data/data/com.termux/files/usr/lib/libunwind.a
 ensure_pkg binutils-is-llvm  # for llvm-objcopy
 python3 -c "import elftools" 2>/dev/null || pip install pyelftools >/dev/null 2>&1
 
-# Detect repo dir from this script's location (handles both `./setup.sh` and
-# `~/copilot-termux-setup/setup.sh` invocations).
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHIM_DIR="$HOME/.copilot-versions/shim"
 SHIM_LIB="$SHIM_DIR/libbionic_shim.so"
 SHIM_SRC="$SHIM_DIR/bionic_shim.c"
