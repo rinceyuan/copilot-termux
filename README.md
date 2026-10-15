@@ -2,6 +2,9 @@
 
 Run **GitHub Copilot CLI** (`@github/copilot`) natively on Android via [Termux](https://termux.dev) — no root required.
 
+**This fork supports Copilot CLI 1.0.98** (latest stable as of October 15, 2026)
+and has been adapted for **Xiaomi 17 Pro**.
+
 ## The Problem
 
 The official `@github/copilot` npm package doesn't support Android. Multiple things break, and they keep moving as upstream restructures:
@@ -50,7 +53,7 @@ This repo provides a single `setup.sh` that:
 
 ```bash
 # Clone this repo
-git clone https://github.com/nishantn15/copilot-termux.git
+git clone https://github.com/rinceyuan/copilot-termux.git
 cd copilot-termux
 
 # Run the full setup (takes 5-15 min for native builds)
@@ -60,6 +63,10 @@ chmod +x setup.sh
 # Authenticate with GitHub
 copilot auth
 ```
+
+Full setup runs `pkg update -y` followed by `pkg upgrade -y` before installing
+dependencies. This upgrades all installed Termux packages to keep tools such as
+`patchelf` compatible with their runtime libraries; setup stops if the upgrade fails.
 
 The script will:
 1. Install Node.js, clang, make, python, patchelf, libsecret (required by keytar), and other build deps
@@ -399,8 +406,9 @@ export PATH="$HOME/.local/bin:$PATH"  # Add to ~/.bashrc
 
 - Termux 0.118+ on Android 13/14/15
 - ARM64 (aarch64) devices
+- Xiaomi 17 Pro (user-reported)
 - Node.js v24+/v25+
-- `@github/copilot` 1.0.45 → **1.0.91** (1.0.85+ needs `shim/extract_sea.py`; 1.0.91+ needs the `Sigaction` translator) (1.0.46+ requires Termux `clang`, `patchelf`, `python3`, `pyelftools`, `ca-certificates`, and `libunwind.a` from `ndk-sysroot`)
+- `@github/copilot` 1.0.45 → **1.0.98** (1.0.85+ needs `shim/extract_sea.py`; 1.0.91+ needs the `Sigaction` translator) (1.0.46+ requires Termux `clang`, `patchelf`, `python3`, `pyelftools`, `ca-certificates`, and `libunwind.a` from `ndk-sysroot`)
 
 ## License
 

@@ -449,13 +449,21 @@ if [ -t 0 ]; then
 fi
 
 ################################################################################
-# STEP 0: Update package repositories and install Node.js
+# STEP 0: Update and upgrade Termux packages, then install Node.js
 ################################################################################
 
 print_header "Updating Termux packages and installing Node.js"
 
 print_info "Running pkg update"
 pkg update -y || print_warning "pkg update failed, continuing anyway"
+
+print_info "Running pkg upgrade"
+if pkg upgrade -y; then
+    print_success "Termux packages upgraded"
+else
+    print_error "Failed to upgrade Termux packages"
+    exit 1
+fi
 
 print_info "Installing core build dependencies"
 ensure_pkg nodejs node

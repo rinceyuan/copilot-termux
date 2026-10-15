@@ -7,6 +7,27 @@ TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 pkg() {
+  printf '%s\n' "$*" >> "$HOME/pkg.log"
+  case "$*" in
+    "update -y") : > "$HOME/.packages-updated" ;;
+    "upgrade -y")
+      if [ ! -f "$HOME/.packages-updated" ]; then
+        echo "Package lists must be updated before upgrading" >&2
+        return 1
+      fi
+      if [ "$PKG_UPGRADE_FAIL" = "1" ]; then
+        echo "Mock package upgrade failure" >&2
+        return 1
+      fi
+      : > "$HOME/.packages-upgraded"
+      ;;
+    "install "*)
+      if [ ! -f "$HOME/.packages-upgraded" ]; then
+        echo "Packages must be upgraded before installing dependencies" >&2
+        return 1
+      fi
+      ;;
+  esac
   if [ "$*" = "install -y libsecret" ]; then
     if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
       echo "Mock libsecret installation failure" >&2
@@ -79,7 +100,8 @@ run_case() (
   mode="$1"
   invocation="$2"
   export LIBSECRET_INSTALL_FAIL="${3:-0}"
-  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL"
+  export PKG_UPGRADE_FAIL="${4:-0}"
+  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL"
   repo="$case_root/repo with spaces"
   export HOME="$case_root/home with spaces"
   export PREFIX="$HOME/usr" TERMUX_VERSION="test"
@@ -121,6 +143,13 @@ run_case() (
   esac
 
   if ! bash "$entrypoint" "$@" </dev/null > "$case_root/setup.log" 2>&1; then
+    if [ "$PKG_UPGRADE_FAIL" = "1" ]; then
+      command grep -q "Failed to upgrade Termux packages" "$case_root/setup.log"
+      test ! -e "$HOME/.packages-upgraded"
+      test ! -d "$HOME/.gyp"
+      test ! -d "$install_root/node_modules"
+      exit 0
+    fi
     if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
       command grep -q "Failed to install libsecret" "$case_root/setup.log"
       test ! -d "$install_root/node_modules/keytar"
@@ -129,9 +158,15 @@ run_case() (
     cat "$case_root/setup.log" >&2
     exit 1
   fi
-  if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
-    echo "Setup should have stopped when libsecret installation failed" >&2
+  if [ "$LIBSECRET_INSTALL_FAIL" = "1" ] || [ "$PKG_UPGRADE_FAIL" = "1" ]; then
+    echo "Setup should have stopped when a package operation failed" >&2
     exit 1
+  fi
+  if [ "$mode" = "install" ]; then
+    test -f "$HOME/.packages-upgraded"
+    test "$(command grep -cx 'upgrade -y' "$HOME/pkg.log")" = 1
+  else
+    test ! -e "$HOME/.packages-upgraded"
   fi
 
   for file in "$repo"/shim/*; do
@@ -158,3 +193,6 @@ done
 
 run_case install local 1
 echo "PASS: libsecret installation failure stops setup before keytar"
+
+run_case install local 0 1
+echo "PASS: package upgrade failure stops setup before installing dependencies"
