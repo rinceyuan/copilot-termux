@@ -6,7 +6,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
-pkg() { return 0; }
+pkg() {
+  if [ "$*" = "install -y libsecret" ]; then
+    if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
+      echo "Mock libsecret installation failure" >&2
+      return 1
+    fi
+    : > "$HOME/.libsecret-installed"
+  fi
+  return 0
+}
 uname() { echo aarch64; }
 node() { return 0; }
 python3() { return 0; }
@@ -26,7 +35,13 @@ npm() {
     "install keytar --ignore-scripts")
       mkdir -p node_modules/keytar/build/Release
       ;;
-    "run build") echo "built keytar" > build/Release/keytar.node ;;
+    "run build")
+      if [ ! -f "$HOME/.libsecret-installed" ]; then
+        echo "libsecret must be installed before building keytar" >&2
+        return 1
+      fi
+      echo "built keytar" > build/Release/keytar.node
+      ;;
     "install -g @github/copilot" | \
     "install -g @github/copilot@1.0.97 --force" | \
     "install node-addon-api@latest --save-dev" | \
@@ -63,7 +78,8 @@ export -f pkg uname node python3 patchelf llvm-objcopy npm clang
 run_case() (
   mode="$1"
   invocation="$2"
-  case_root="$TEST_ROOT/$mode-$invocation"
+  export LIBSECRET_INSTALL_FAIL="${3:-0}"
+  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL"
   repo="$case_root/repo with spaces"
   export HOME="$case_root/home with spaces"
   export PREFIX="$HOME/usr" TERMUX_VERSION="test"
@@ -105,13 +121,23 @@ run_case() (
   esac
 
   if ! bash "$entrypoint" "$@" </dev/null > "$case_root/setup.log" 2>&1; then
+    if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
+      command grep -q "Failed to install libsecret" "$case_root/setup.log"
+      test ! -d "$install_root/node_modules/keytar"
+      exit 0
+    fi
     cat "$case_root/setup.log" >&2
+    exit 1
+  fi
+  if [ "$LIBSECRET_INSTALL_FAIL" = "1" ]; then
+    echo "Setup should have stopped when libsecret installation failed" >&2
     exit 1
   fi
 
   for file in "$repo"/shim/*; do
     cmp "$file" "$HOME/.copilot-versions/shim/$(basename "$file")"
   done
+
   cmp "$repo/scripts/copilot-wrapper.sh" "$HOME/.local/bin/copilot"
   cmp "$repo/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"
   test -x "$HOME/.local/bin/copilot"
@@ -129,3 +155,6 @@ for mode in install update-rebuild update-backup; do
     echo "PASS: $mode ($invocation path)"
   done
 done
+
+run_case install local 1
+echo "PASS: libsecret installation failure stops setup before keytar"

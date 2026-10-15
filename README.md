@@ -62,7 +62,7 @@ copilot auth
 ```
 
 The script will:
-1. Install Node.js, clang, make, python, patchelf, and other build deps
+1. Install Node.js, clang, make, python, patchelf, libsecret (required by keytar), and other build deps
 2. Install `@github/copilot` globally
 3. Build node-pty, keytar, and sharp from source
 4. Set up clipboard wrapper using Termux API

@@ -537,6 +537,14 @@ ensure_pkg libvips
 ensure_pkg pkg-config pkg-config
 ensure_pkg ripgrep rg
 
+print_info "Installing libsecret (required to build keytar)"
+if pkg install -y libsecret; then
+    print_success "libsecret installed"
+else
+    print_error "Failed to install libsecret"
+    exit 1
+fi
+
 print_success "System dependencies installed successfully"
 
 # Ensure packaged ripgrep is available system-wide if no system 'rg' exists.
@@ -1123,7 +1131,7 @@ print_header "Installation Summary"
 
 echo "Installed Packages:"
 echo "  • nodejs, clang, make, python"
-echo "  • glib, xorgproto, rust, libvips, pkg-config"
+echo "  • glib, xorgproto, rust, libvips, pkg-config, libsecret"
 echo "  • ripgrep, termux-api, patchelf"
 echo ""
 echo "Native Modules Built:"
