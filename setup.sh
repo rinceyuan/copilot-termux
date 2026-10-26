@@ -167,7 +167,7 @@ if [ "$UPDATE_MODE" = true ]; then
   # but Termux reports os:android — --force skips that validation)
   echo ""
   echo "▶ Installing @github/copilot@$TARGET_VERSION..."
-  if npm install -g "@github/copilot@$TARGET_VERSION" --force 2>&1 | command grep -v "^npm warn using --force"; then
+  if npm install -g "@github/copilot@$TARGET_VERSION" --force; then
     echo "✓ npm install succeeded"
   else
     echo "✗ npm update failed"
@@ -179,14 +179,16 @@ if [ "$UPDATE_MODE" = true ]; then
   # stub alone upgrades the loader and leaves the OLD binaries in place. Install
   # the platform package explicitly, at the SAME version, or the two halves drift.
   MUSL_PKG_NAME="@github/copilot-linuxmusl-${ANDROID_ARCH#android-}"
-  if npm ls -g --depth=0 2>/dev/null | command grep -q "$MUSL_PKG_NAME"; then
+  if [ -f "$INSTALL_ROOT/npm-loader.js" ] || \
+     npm ls -g --depth=0 2>/dev/null | command grep -q "$MUSL_PKG_NAME"; then
     echo ""
     echo "▶ Installing $MUSL_PKG_NAME@$TARGET_VERSION (platform binaries)..."
-    if npm install -g --force "$MUSL_PKG_NAME@$TARGET_VERSION" 2>&1 | command grep -v "^npm warn using --force"; then
+    if npm install -g --force "$MUSL_PKG_NAME@$TARGET_VERSION"; then
       echo "✓ Platform package at $TARGET_VERSION"
     else
-      echo "⚠ Could not install $MUSL_PKG_NAME@$TARGET_VERSION - binaries may be stale."
+      echo "✗ Could not install $MUSL_PKG_NAME@$TARGET_VERSION; stopping before native builds."
       echo "  Retry manually: npm install -g --force $MUSL_PKG_NAME@$TARGET_VERSION"
+      exit 1
     fi
   fi
 
@@ -515,26 +517,29 @@ fi
 # binaries live in a per-platform optional dep. npm SKIPS it silently because its
 # os field is "linux" while Termux reports "android", so it must be forced.
 # Without this a fresh install has no runtime.node/cli-native.node at all.
-if [ ! -d "$INSTALL_ROOT/prebuilds" ] && [ ! -d "$INSTALL_ROOT/native" ]; then
-    # No binaries under the stub => split-package layout (1.0.73+).
+if [ -f "$INSTALL_ROOT/npm-loader.js" ] || \
+   { [ ! -d "$INSTALL_ROOT/prebuilds" ] && [ ! -d "$INSTALL_ROOT/native" ]; }; then
+    # Setup itself creates prebuilds/android-* under the stub. Those leftovers
+    # must not prevent a later full setup from restoring the platform package.
     MUSL_PKG_NAME="@github/copilot-linuxmusl-${ANDROID_ARCH#android-}"
     # PIN to the stub's own version. Unpinned this resolves to @latest, and since
     # 1.0.85 that is a musl SEA with no .node modules at all - pairing it with an
     # older stub gives an install that cannot start, and the mismatch is not
     # obvious from the error.
-    STUB_VERSION="$(node -p "require('$INSTALL_ROOT/package.json').version" 2>/dev/null || echo "")"
-    if [ -n "$STUB_VERSION" ]; then
+    if STUB_VERSION="$(node -p 'require(process.argv[1]).version' "$INSTALL_ROOT/package.json")" && \
+       [[ "$STUB_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.+-]+)?$ ]]; then
         MUSL_PKG_SPEC="$MUSL_PKG_NAME@$STUB_VERSION"
     else
-        MUSL_PKG_SPEC="$MUSL_PKG_NAME"
-        print_warning "Could not read stub version; installing $MUSL_PKG_NAME unpinned"
+        print_error "Could not read a valid Copilot package version; refusing an unpinned platform install"
+        exit 1
     fi
     print_info "1.0.73+ layout: installing $MUSL_PKG_SPEC (needs --force on Termux)"
-    if npm install -g --force "$MUSL_PKG_SPEC" 2>&1 | command grep -v "^npm warn using --force"; then
+    if npm install -g --force "$MUSL_PKG_SPEC"; then
         print_info "Platform package installed"
     else
-        print_warning "Could not install $MUSL_PKG_NAME - copilot will not start."
-        print_warning "  Retry manually: npm install -g --force $MUSL_PKG_NAME"
+        print_error "Could not install $MUSL_PKG_SPEC; stopping before native builds"
+        print_info "Retry manually: npm install -g --force $MUSL_PKG_SPEC"
+        exit 1
     fi
 fi
 

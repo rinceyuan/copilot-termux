@@ -52,6 +52,14 @@ python3() {
   fi
   if [ "$1" = "-c" ]; then
     test "$3" = "$NPM_TEST_ROOT/@github/copilot-linuxmusl-arm64/package.json" || return 1
+    if [ "$SEA_BEHAVIOR" = "bad-version" ]; then
+      echo "Mock JSONDecodeError: damaged package.json" >&2
+      return 1
+    fi
+    if [ "$SEA_BEHAVIOR" = "unsafe-version" ]; then
+      echo "../../other-app"
+      return 0
+    fi
     echo "1.0.97"
     return 0
   fi
@@ -62,10 +70,17 @@ python3() {
       command grep -qx "$6" "$3/.sea-extracted-version"
     return $?
   fi
+  : > "$HOME/extraction-attempted"
+  if [ "$SEA_BEHAVIOR" = "failed-unpack" ]; then
+    echo "[extract_sea] mock truncated package" >&2
+    return 2
+  fi
   mkdir -p "$3/prebuilds/linuxmusl-arm64"
   : > "$3/index.js"
   : > "$3/prebuilds/linuxmusl-arm64/runtime.node"
-  printf '%s\n' "$5" > "$3/.sea-extracted-version"
+  if [ "$SEA_BEHAVIOR" != "incomplete-unpack" ]; then
+    printf '%s\n' "$5" > "$3/.sea-extracted-version"
+  fi
 }
 
 exec() {
@@ -88,11 +103,12 @@ run_case() (
   export HOME="$case_root/home with spaces" PREFIX="$case_root/termux"
   export EXEC_LOG="$case_root/exec.log" NPM_RESULT=success
   export PATCHELF_LOG="$case_root/patchelf.log" PATCH_BEHAVIOR=success
+  export SEA_BEHAVIOR="$scenario"
   unset LD_PRELOAD LD_LIBRARY_PATH NATIVE_TEST_DIR
   mkdir -p "$HOME"
 
   case "$scenario" in
-    default-sea)
+    default-sea|bad-version|unsafe-version|failed-unpack|incomplete-unpack)
       export NPM_TEST_ROOT="$PREFIX/lib/node_modules"
       package="$NPM_TEST_ROOT/@github/copilot-linuxmusl-arm64"
       mkdir -p "$package" "$HOME/.copilot-versions/shim"
@@ -100,6 +116,13 @@ run_case() (
       echo '{"version":"1.0.97"}' > "$package/package.json"
       : > "$HOME/.copilot-versions/shim/extract_sea.py"
       expected_entry="$HOME/.copilot-versions/sea-1.0.97/index.js"
+      if [ "$scenario" = "failed-unpack" ]; then
+        # An old index.js must not hide extraction failure or launch stale code.
+        mkdir -p "$(dirname "$expected_entry")/prebuilds/linuxmusl-arm64"
+        : > "$expected_entry"
+        : > "$(dirname "$expected_entry")/prebuilds/linuxmusl-arm64/runtime.node"
+        echo "old-version" > "$(dirname "$expected_entry")/.sea-extracted-version"
+      fi
       ;;
     custom-split|mouse-split-ui|mouse-changed-ui)
       export NPM_TEST_ROOT="$HOME/custom npm/lib/node_modules"
@@ -179,7 +202,7 @@ run_case() (
   if bash "$REPO_ROOT/scripts/copilot-wrapper.sh" -p "hello world" \
       > "$case_root/wrapper.log" 2>&1; then
     case "$scenario" in
-      npm-*|missing-entry|patch-*)
+      npm-*|missing-entry|patch-*|bad-version|unsafe-version|failed-unpack|incomplete-unpack)
         echo "FAIL: $scenario unexpectedly succeeded" >&2
         cat "$case_root/wrapper.log" >&2
         exit 1
@@ -229,6 +252,23 @@ run_case() (
     fi
   else
     case "$scenario" in
+      bad-version|unsafe-version)
+        command grep -q "ERROR: could not read a valid SEA package version" "$case_root/wrapper.log"
+        test ! -e "$HOME/extraction-attempted"
+        if [ "$scenario" = "bad-version" ]; then
+          command grep -q "JSONDecodeError" "$case_root/wrapper.log"
+        fi
+        ;;
+      failed-unpack)
+        command grep -q "ERROR: could not unpack the app" "$case_root/wrapper.log"
+        if command grep -q "no copilot entry point found" "$case_root/wrapper.log"; then
+          cat "$case_root/wrapper.log" >&2
+          exit 1
+        fi
+        ;;
+      incomplete-unpack)
+        command grep -q "ERROR: extracted app is incomplete" "$case_root/wrapper.log"
+        ;;
       patch-*)
         command grep -q "ERROR: native runtime patch is incomplete" "$case_root/wrapper.log"
         ;;
@@ -251,7 +291,8 @@ run_case() (
 
 for scenario in default-sea custom-split home-legacy npm-failure npm-empty missing-entry \
                 unpatched-sea missing-math patch-failure patch-noop \
-                mouse-split-ui mouse-legacy-ui mouse-changed-ui; do
+                mouse-split-ui mouse-legacy-ui mouse-changed-ui \
+                bad-version unsafe-version failed-unpack incomplete-unpack; do
   run_case "$scenario"
   echo "PASS: $scenario"
 done

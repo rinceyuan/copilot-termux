@@ -373,18 +373,30 @@ patch_mouse_js() {
 # NOT into the npm package dir - overwriting the platform package.json there would
 # confuse npm about what is installed.
 if [ ! -f "$MUSL_PKG/index.js" ] && [ -f "$MUSL_PKG/copilot" ] && [ -f "$EXTRACT_SEA_PY" ]; then
-    SEA_VER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' \
-               "$MUSL_PKG/package.json" 2>/dev/null || echo unknown)"
+    if ! SEA_VER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' \
+                   "$MUSL_PKG/package.json")" || \
+       ! [[ "$SEA_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.+-]+)?$ ]]; then
+        warn "ERROR: could not read a valid SEA package version from $MUSL_PKG/package.json."
+        warn "       Check the Python error above; the package may be incomplete or corrupt."
+        warn "       Restore the platform package with the full ./setup.sh from an updated clone."
+        exit 1
+    fi
     SEA_DIR="$HOME/.copilot-versions/sea-$SEA_VER"
     if ! python3 "$EXTRACT_SEA_PY" "$MUSL_PKG/copilot" "$SEA_DIR" \
             --check --version "$SEA_VER" >/dev/null 2>&1; then
         warn "SEA package detected ($SEA_VER): unpacking the app once, this takes a few seconds"
-        python3 "$EXTRACT_SEA_PY" "$MUSL_PKG/copilot" "$SEA_DIR" --version "$SEA_VER" || \
+        if ! python3 "$EXTRACT_SEA_PY" "$MUSL_PKG/copilot" "$SEA_DIR" --version "$SEA_VER"; then
             warn "ERROR: could not unpack the app from $MUSL_PKG/copilot - copilot cannot start"
+            warn "       Reinstall @github/copilot-linuxmusl-$ARCH_SUFFIX@$SEA_VER if the download is damaged."
+            exit 1
+        fi
+        if ! python3 "$EXTRACT_SEA_PY" "$MUSL_PKG/copilot" "$SEA_DIR" \
+                --check --version "$SEA_VER"; then
+            warn "ERROR: extracted app is incomplete; refusing to start from $SEA_DIR."
+            exit 1
+        fi
     fi
-    if [ -f "$SEA_DIR/index.js" ]; then
-        MUSL_PKG="$SEA_DIR"      # everything downstream now sees the old layout
-    fi
+    MUSL_PKG="$SEA_DIR"      # everything downstream now sees the verified layout
 fi
 
 # --- pick entry point ----------------------------------------------------

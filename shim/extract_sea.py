@@ -172,6 +172,10 @@ def main(argv):
         return 2
     with open(sea, "rb") as fh:
         data = fh.read()
+    if not data.startswith(b"\x7fELF"):
+        log("not a Linux ELF SEA binary (%d bytes): %s" % (len(data), sea))
+        log("the platform executable may be overwritten or corrupt; reinstall its npm package")
+        return 2
 
     tmp_dir = os.path.dirname(os.path.abspath(dest)) or "."
     os.makedirs(tmp_dir, exist_ok=True)
@@ -179,17 +183,22 @@ def main(argv):
     tmp.close()
     try:
         root = None
-        for off in gzip_candidates(data):
+        candidates = gzip_candidates(data)
+        inflated = 0
+        for off in candidates:
             n = inflate(data, off, tmp.name)
             if not n:
                 continue
+            inflated += 1
             root = tar_is_app(tmp.name)
             if root:
                 log("found app tarball at offset %d (%d bytes inflated)" % (off, n))
                 break
         if not root:
             log("could not find an app tarball inside %s" % sea)
-            log("upstream may have changed the SEA asset; nothing was written")
+            log("%d bytes, %d gzip candidates, %d complete gzip streams" %
+                (len(data), len(candidates), inflated))
+            log("package may be truncated/corrupt or use an unsupported asset format; no app was written")
             return 2
         os.makedirs(dest, exist_ok=True)
         with tarfile.open(tmp.name) as t:
@@ -202,6 +211,9 @@ def main(argv):
                 t.extractall(dest, members=members, filter="data")
             except TypeError:
                 t.extractall(dest, members=members)
+        if not already_extracted(dest):
+            log("extracted archive is missing required app files or prebuilds")
+            return 2
         if version:
             with open(os.path.join(dest, MARKER), "w") as fh:
                 fh.write(version + "\n")

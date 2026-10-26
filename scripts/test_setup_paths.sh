@@ -38,7 +38,16 @@ pkg() {
   return 0
 }
 uname() { echo aarch64; }
-node() { return 0; }
+node() {
+  if [ "${1:-}" = "-p" ]; then
+    if [ "$PACKAGE_SCENARIO" = "version-failure" ]; then
+      echo "Mock damaged package.json" >&2
+      return 1
+    fi
+    echo "1.0.97"
+  fi
+  return 0
+}
 python3() {
   if [[ "$1" == */scripts/check_termux_python.py ]]; then
     test -f "$1" || return 1
@@ -59,6 +68,21 @@ npm() {
     return 1
   fi
   case "$*" in
+    "install -g @github/copilot@1.0.97 --force")
+      if [ "$PACKAGE_SCENARIO" = "stub-failure" ]; then
+        echo "npm error mock failed stub download" >&2
+        return 1
+      fi
+      echo "Mock npm: $*"
+      ;;
+    "install -g --force @github/copilot-linuxmusl-arm64@1.0.97")
+      if [ "$PACKAGE_SCENARIO" = "platform-failure" ]; then
+        echo "npm error mock failed platform download" >&2
+        return 1
+      fi
+      : > "$HOME/.platform-installed"
+      echo "Mock npm: $*"
+      ;;
     "root -g") echo "$HOME/npm/lib/node_modules" ;;
     "list -g @github/copilot") echo "@github/copilot@1.0.91" ;;
     "view @github/copilot version") echo "1.0.97" ;;
@@ -78,7 +102,6 @@ npm() {
       echo "built keytar" > build/Release/keytar.node
       ;;
     "install -g @github/copilot" | \
-    "install -g @github/copilot@1.0.97 --force" | \
     "install node-addon-api@latest --save-dev" | \
     "install sharp" | \
     "install @teddyzhu/clipboard --ignore-scripts")
@@ -116,7 +139,8 @@ run_case() (
   export LIBSECRET_INSTALL_FAIL="${3:-0}"
   export PKG_UPGRADE_FAIL="${4:-0}"
   export PYTHON_CHECK_FAIL="${5:-0}"
-  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL-$PYTHON_CHECK_FAIL"
+  export PACKAGE_SCENARIO="${6:-legacy}"
+  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL-$PYTHON_CHECK_FAIL-$PACKAGE_SCENARIO"
   repo="$case_root/repo with spaces"
   export HOME="$case_root/home with spaces"
   export PREFIX="$HOME/usr" TERMUX_VERSION="test"
@@ -125,6 +149,9 @@ run_case() (
   mkdir -p "$repo/shim" "$repo/scripts" "$install_root/prebuilds/android-arm64"
   cp "$REPO_ROOT/setup.sh" "$repo/setup.sh"
   cp "$REPO_ROOT/scripts/check_termux_python.py" "$repo/scripts/"
+  if [ "$PACKAGE_SCENARIO" != "legacy" ]; then
+    : > "$install_root/npm-loader.js"
+  fi
 
   for file in bionic_shim.c strip_verneed.py patch_js.py gai_xlate.c \
               pthread_xlate.c rename_imports.py patch_mouse.py extract_sea.py; do
@@ -159,6 +186,23 @@ run_case() (
   esac
 
   if ! bash "$entrypoint" "$@" </dev/null > "$case_root/setup.log" 2>&1; then
+    case "$PACKAGE_SCENARIO" in
+      platform-failure)
+        command grep -q "Could not install @github/copilot-linuxmusl-arm64@1.0.97" "$case_root/setup.log"
+        test ! -d "$install_root/node_modules"
+        exit 0
+        ;;
+      stub-failure)
+        command grep -q "npm update failed" "$case_root/setup.log"
+        test ! -d "$install_root/node_modules"
+        exit 0
+        ;;
+      version-failure)
+        command grep -q "Could not read a valid Copilot package version" "$case_root/setup.log"
+        test ! -e "$HOME/.platform-installed"
+        exit 0
+        ;;
+    esac
     if [ "$PYTHON_CHECK_FAIL" = "1" ]; then
       command grep -q "Python verification failed" "$case_root/setup.log"
       test ! -e "$HOME/.python-checked"
@@ -181,6 +225,15 @@ run_case() (
     cat "$case_root/setup.log" >&2
     exit 1
   fi
+  case "$PACKAGE_SCENARIO" in
+    *-failure) echo "Setup ignored a failed package operation" >&2; exit 1 ;;
+    split)
+      test -f "$HOME/.platform-installed" || {
+        echo "Setup skipped the missing platform package because prebuilds already existed" >&2
+        exit 1
+      }
+      ;;
+  esac
   if [ "$LIBSECRET_INSTALL_FAIL" = "1" ] || [ "$PKG_UPGRADE_FAIL" = "1" ] || \
      [ "$PYTHON_CHECK_FAIL" = "1" ]; then
     echo "Setup should have stopped when a package operation failed" >&2
@@ -224,3 +277,14 @@ echo "PASS: package upgrade failure stops setup before installing dependencies"
 
 run_case install local 0 0 1
 echo "PASS: Python health check failure stops setup before node-gyp or Copilot"
+
+for mode in install update-rebuild; do
+  run_case "$mode" local 0 0 0 split
+  echo "PASS: $mode restores the platform package despite leftover prebuilds"
+  run_case "$mode" local 0 0 0 platform-failure
+  echo "PASS: $mode does not mask npm platform failures with grep"
+done
+run_case update-rebuild local 0 0 0 stub-failure
+echo "PASS: update does not mask npm stub failure with grep"
+run_case install local 0 0 0 version-failure
+echo "PASS: invalid stub metadata cannot trigger an unpinned platform installation"

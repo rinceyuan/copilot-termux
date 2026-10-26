@@ -180,6 +180,36 @@ Offline regression tests: `python3 -m unittest discover -s scripts -p test_termu
 and `bash scripts/test_setup_paths.sh`. These do not establish compatibility
 with a particular e-reader; that still requires running setup on the device.
 
+### SEA unpacking fails, especially with version `unknown`
+
+`SEA package detected (unknown)` means reading the platform package's version
+failed. For example, a missing `@github/copilot-linuxmusl-arm64/package.json`
+confirms an incomplete installation; it does not establish an upstream format
+change. A truncated or overwritten `copilot` executable can also contain no
+usable application tarball.
+
+For a damaged ARM64 platform package, run this from your repository clone:
+
+```bash
+git pull --ff-only &&
+npm uninstall -g @github/copilot-linuxmusl-arm64 &&
+./setup.sh
+```
+
+This removes only that npm platform package, not your Copilot configuration.
+Full setup reinstalls the platform package at the main package's version, even
+when an earlier setup left `prebuilds/android-*` in the loader directory.
+Do not use `--update` for this recovery: it can exit early when versions match.
+Download failures now stop setup instead of being hidden by output filtering.
+
+The launcher preserves version-reading errors, rejects unknown versions, and
+stops immediately after failed or incomplete extraction rather than falling
+through to misleading missing-entry instructions or launching a stale cache.
+The extractor reports non-ELF executables and gzip stream counts to distinguish
+damaged downloads from a possible format change. Extraction of the published
+ARM64 musl 1.0.103 package was checked locally; this is not an Android runtime
+compatibility claim.
+
 ### "Repo's shim/bionic_shim.c not found" under the npm directory
 
 If the error points to `.../node_modules/@github/copilot/shim/` even though
