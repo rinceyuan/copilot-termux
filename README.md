@@ -147,6 +147,39 @@ detects this directory automatically, including Termux's default
 
 ## Troubleshooting
 
+### Python setup: `cannot get content of python` / `python-pip`
+
+These `py3compile` tracebacks come from Termux's Python package configuration,
+not Copilot. Package installation can still exit successfully, so an
+`installed` message alone does not prove that Python is usable.
+One known cause on Android 7/8 is `debpython` setting `LD_PRELOAD` to an empty
+string instead of removing it (Termux issue #29017 and proposed fix #30119).
+The same traceback can have other causes; the device's Android version alone
+is not enough to choose a repair.
+
+Update your clone and rerun the **full** installer:
+
+```bash
+git pull --ff-only && ./setup.sh
+```
+
+Setup now checks Python's runtime modules, subprocess execution, pip, and the
+file lists for both Python packages before configuring node-gyp or installing
+Copilot. Only when the exact known line exists **and an in-memory retry succeeds**
+does it back up `debpython/files.py`, apply that one-line fix, verify it, and
+retry byte compilation. Healthy installations are left untouched; unrelated
+failures stop setup rather than proceeding with unverified Python. A package
+upgrade may overwrite the workaround; rerunning setup checks it again.
+
+If `pkg upgrade` itself stops before this check, and Python and pip already run,
+invoke `python3 scripts/check_termux_python.py` from the updated clone, then
+rerun `./setup.sh`. If the check cannot repair the problem, include its output,
+the original package error, and `termux-info` when reporting it.
+
+Offline regression tests: `python3 -m unittest discover -s scripts -p test_termux_python.py`
+and `bash scripts/test_setup_paths.sh`. These do not establish compatibility
+with a particular e-reader; that still requires running setup on the device.
+
 ### "Repo's shim/bionic_shim.c not found" under the npm directory
 
 If the error points to `.../node_modules/@github/copilot/shim/` even though

@@ -469,12 +469,21 @@ print_info "Installing core build dependencies"
 ensure_pkg nodejs node
 ensure_pkg clang clang
 ensure_pkg make make
-ensure_pkg python python
+ensure_pkg python python3
+ensure_pkg python-pip pip
 # The Rust runtime's rustls-native-certs finds NO trust store on Android
 # (/etc/ssl/* do not exist), so every HTTPS request dies with "No CA
 # certificates were loaded from the system" -> auth failure + a TUI segfault.
 # The wrapper points SSL_CERT_FILE at this bundle; make sure it exists.
 ensure_pkg ca-certificates
+
+print_info "Verifying Python, pip and package configuration"
+if python3 "$REPO_DIR/scripts/check_termux_python.py"; then
+    print_success "Python verification passed"
+else
+    print_error "Python verification failed; stopping before native builds"
+    exit 1
+fi
 
 # Create .gyp configuration for node-gyp (fixes android ndk path issues)
 # Non-destructive: only create if missing
@@ -944,10 +953,10 @@ print_step "Step 11/13: Installing native runtime patch (1.0.46+ compat)"
 # pick up new symbol forwarders when upstream copilot adds glibc probes.
 
 ensure_pkg patchelf patchelf
-ensure_pkg python python
+ensure_pkg python python3
 ensure_pkg ndk-sysroot   # for /data/data/com.termux/files/usr/lib/libunwind.a
 ensure_pkg binutils-is-llvm  # for llvm-objcopy
-python3 -c "import elftools" 2>/dev/null || pip install pyelftools >/dev/null 2>&1
+python3 -c "import elftools" 2>/dev/null || python3 -m pip install pyelftools
 
 SHIM_DIR="$HOME/.copilot-versions/shim"
 SHIM_LIB="$SHIM_DIR/libbionic_shim.so"

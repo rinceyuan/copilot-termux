@@ -39,11 +39,25 @@ pkg() {
 }
 uname() { echo aarch64; }
 node() { return 0; }
-python3() { return 0; }
+python3() {
+  if [[ "$1" == */scripts/check_termux_python.py ]]; then
+    test -f "$1" || return 1
+    if [ "$PYTHON_CHECK_FAIL" = "1" ]; then
+      echo "Mock Python/package health check failed" >&2
+      return 1
+    fi
+    : > "$HOME/.python-checked"
+  fi
+  return 0
+}
 patchelf() { return 0; }
 llvm-objcopy() { return 0; }
 
 npm() {
+  if [ "$*" = "install -g @github/copilot" ] && [ ! -f "$HOME/.python-checked" ]; then
+    echo "Python must be checked before installing Copilot" >&2
+    return 1
+  fi
   case "$*" in
     "root -g") echo "$HOME/npm/lib/node_modules" ;;
     "list -g @github/copilot") echo "@github/copilot@1.0.91" ;;
@@ -101,7 +115,8 @@ run_case() (
   invocation="$2"
   export LIBSECRET_INSTALL_FAIL="${3:-0}"
   export PKG_UPGRADE_FAIL="${4:-0}"
-  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL"
+  export PYTHON_CHECK_FAIL="${5:-0}"
+  case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL-$PYTHON_CHECK_FAIL"
   repo="$case_root/repo with spaces"
   export HOME="$case_root/home with spaces"
   export PREFIX="$HOME/usr" TERMUX_VERSION="test"
@@ -109,6 +124,7 @@ run_case() (
   install_root="$HOME/npm/lib/node_modules/@github/copilot"
   mkdir -p "$repo/shim" "$repo/scripts" "$install_root/prebuilds/android-arm64"
   cp "$REPO_ROOT/setup.sh" "$repo/setup.sh"
+  cp "$REPO_ROOT/scripts/check_termux_python.py" "$repo/scripts/"
 
   for file in bionic_shim.c strip_verneed.py patch_js.py gai_xlate.c \
               pthread_xlate.c rename_imports.py patch_mouse.py extract_sea.py; do
@@ -143,6 +159,13 @@ run_case() (
   esac
 
   if ! bash "$entrypoint" "$@" </dev/null > "$case_root/setup.log" 2>&1; then
+    if [ "$PYTHON_CHECK_FAIL" = "1" ]; then
+      command grep -q "Python verification failed" "$case_root/setup.log"
+      test ! -e "$HOME/.python-checked"
+      test ! -d "$HOME/.gyp"
+      test ! -d "$install_root/node_modules"
+      exit 0
+    fi
     if [ "$PKG_UPGRADE_FAIL" = "1" ]; then
       command grep -q "Failed to upgrade Termux packages" "$case_root/setup.log"
       test ! -e "$HOME/.packages-upgraded"
@@ -158,11 +181,13 @@ run_case() (
     cat "$case_root/setup.log" >&2
     exit 1
   fi
-  if [ "$LIBSECRET_INSTALL_FAIL" = "1" ] || [ "$PKG_UPGRADE_FAIL" = "1" ]; then
+  if [ "$LIBSECRET_INSTALL_FAIL" = "1" ] || [ "$PKG_UPGRADE_FAIL" = "1" ] || \
+     [ "$PYTHON_CHECK_FAIL" = "1" ]; then
     echo "Setup should have stopped when a package operation failed" >&2
     exit 1
   fi
   if [ "$mode" = "install" ]; then
+    test -f "$HOME/.python-checked"
     test -f "$HOME/.packages-upgraded"
     test "$(command grep -cx 'upgrade -y' "$HOME/pkg.log")" = 1
   else
@@ -196,3 +221,6 @@ echo "PASS: libsecret installation failure stops setup before keytar"
 
 run_case install local 0 1
 echo "PASS: package upgrade failure stops setup before installing dependencies"
+
+run_case install local 0 0 1
+echo "PASS: Python health check failure stops setup before node-gyp or Copilot"
