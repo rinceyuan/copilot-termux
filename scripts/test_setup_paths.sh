@@ -63,6 +63,9 @@ patchelf() { return 0; }
 llvm-objcopy() { return 0; }
 
 npm() {
+  case "${1:-}" in
+    install|update) : > "$HOME/.npm-install-attempted" ;;
+  esac
   if [ "$*" = "install -g @github/copilot" ] && [ ! -f "$HOME/.python-checked" ]; then
     echo "Python must be checked before installing Copilot" >&2
     return 1
@@ -84,7 +87,7 @@ npm() {
       echo "Mock npm: $*"
       ;;
     "root -g") echo "$HOME/npm/lib/node_modules" ;;
-    "list -g @github/copilot") echo "@github/copilot@1.0.91" ;;
+    "list -g @github/copilot") echo "@github/copilot@$INSTALLED_VERSION" ;;
     "view @github/copilot version") echo "1.0.97" ;;
     "ls -g --depth=0") echo "" ;;
     "install node-pty")
@@ -140,6 +143,8 @@ run_case() (
   export PKG_UPGRADE_FAIL="${4:-0}"
   export PYTHON_CHECK_FAIL="${5:-0}"
   export PACKAGE_SCENARIO="${6:-legacy}"
+  export INSTALLED_VERSION=1.0.91
+  [ "$mode" != "update-current" ] || export INSTALLED_VERSION=1.0.97
   case_root="$TEST_ROOT/$mode-$invocation-$LIBSECRET_INSTALL_FAIL-$PKG_UPGRADE_FAIL-$PYTHON_CHECK_FAIL-$PACKAGE_SCENARIO"
   repo="$case_root/repo with spaces"
   export HOME="$case_root/home with spaces"
@@ -154,7 +159,8 @@ run_case() (
   fi
 
   for file in bionic_shim.c strip_verneed.py patch_js.py gai_xlate.c \
-              pthread_xlate.c rename_imports.py patch_mouse.py extract_sea.py; do
+              pthread_xlate.c rename_imports.py patch_mouse.py extract_sea.py \
+              spawn_xlate.c tls_xlate.c; do
     printf 'fixture: %s\n' "$file" > "$repo/shim/$file"
   done
   printf '#!%s\necho "GitHub Copilot CLI 1.0.97"\n' "$(command -v bash)" \
@@ -168,6 +174,10 @@ run_case() (
   fi
   if [ "$mode" = "update-backup" ]; then
     echo "existing pty" > "$install_root/prebuilds/android-arm64/pty.node"
+  elif [ "$mode" = "update-current" ]; then
+    mkdir -p "$HOME/.local/bin" "$HOME/.copilot-versions/shim"
+    echo stale > "$HOME/.local/bin/copilot"
+    echo stale > "$HOME/.copilot-versions/shim/spawn_xlate.c"
   fi
 
   case "$invocation" in
@@ -255,7 +265,11 @@ run_case() (
   cmp "$repo/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"
   test -x "$HOME/.local/bin/copilot"
   test -x "$HOME/.copilot-versions/pty_tui_test.py"
-  if [ "$mode" = "update-backup" ]; then
+  if [ "$mode" = "update-current" ]; then
+    test ! -e "$HOME/.npm-install-attempted"
+    test ! -e "$install_root/prebuilds/android-arm64/pty.node"
+    command grep -q "Already up to date" "$case_root/setup.log"
+  elif [ "$mode" = "update-backup" ]; then
     command grep -qx "existing pty" "$install_root/prebuilds/android-arm64/pty.node"
   else
     command grep -qx "rebuilt pty" "$install_root/prebuilds/android-arm64/pty.node"
@@ -268,6 +282,9 @@ for mode in install update-rebuild update-backup; do
     echo "PASS: $mode ($invocation path)"
   done
 done
+
+run_case update-current local
+echo "PASS: same-version update refreshes compatibility sources and launcher without npm install"
 
 run_case install local 1
 echo "PASS: libsecret installation failure stops setup before keytar"

@@ -74,6 +74,10 @@ GAI_LIB="$SHIM_DIR/libgai_xlate.so"
 GAI_SRC="$SHIM_DIR/gai_xlate.c"
 PTH_LIB="$SHIM_DIR/libpthread_xlate.so"
 PTH_SRC="$SHIM_DIR/pthread_xlate.c"
+SPAWN_LIB="$SHIM_DIR/libspawn_xlate.so"
+SPAWN_SRC="$SHIM_DIR/spawn_xlate.c"
+TLS_LIB="$SHIM_DIR/libtls_xlate.so"
+TLS_SRC="$SHIM_DIR/tls_xlate.c"
 RENAME_PY="$SHIM_DIR/rename_imports.py"
 STRIP_PY="$SHIM_DIR/strip_verneed.py"
 PATCH_JS_PY="$SHIM_DIR/patch_js.py"
@@ -122,6 +126,30 @@ AVAIL_SYMS="atexit"
 # the mask value and dies. Sigaction in pthread_xlate.c converts both ways.
 SIG_SYMS="sigaction"
 ALL_XLATE_SYMS="$GAI_SYMS $PTH_SYMS $COND_SYMS $MUTEX_EXTRA_SYMS $AVAIL_SYMS $SIG_SYMS"
+
+# Android added spawn in API 28 and its chdir action in API 34. Keep the whole
+# opaque-object API on one provider; mixing libc attrs with a backport is unsafe.
+SPAWN_SYMS="posix_spawnattr_init posix_spawnattr_destroy posix_spawnattr_setflags posix_spawnattr_setpgroup posix_spawnattr_setsigdefault posix_spawn_file_actions_init posix_spawn_file_actions_destroy posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addchdir_np posix_spawnp"
+NEED_SPAWN_XLATE=0
+if ! python3 -c 'import ctypes,sys; libc=ctypes.CDLL("libc.so"); [getattr(libc, name) for name in sys.argv[1:]]' \
+        $SPAWN_SYMS >/dev/null 2>&1; then
+    NEED_SPAWN_XLATE=1
+    ALL_XLATE_SYMS="$ALL_XLATE_SYMS $SPAWN_SYMS"
+    MUSL_NEEDED_LIBS="$MUSL_NEEDED_LIBS libspawn_xlate.so"
+fi
+
+NEED_TLS_XLATE=0
+ANDROID_SDK="$(getprop ro.build.version.sdk 2>/dev/null || true)"
+if [[ "$ANDROID_SDK" =~ ^[0-9]+$ ]] && [ "$ANDROID_SDK" -lt 29 ]; then
+    NEED_TLS_XLATE=1
+fi
+
+node_needed_libs() {
+    printf '%s ' "$MUSL_NEEDED_LIBS"
+    if [ "$NEED_TLS_XLATE" = "1" ]; then
+        printf 'libtls_xlate-%s.so' "$(basename "$1" .node)"
+    fi
+}
 
 # Echo the subset of $ALL_XLATE_SYMS that $1 actually imports (UND in .dynsym),
 # in either the original or already-renamed spelling.
@@ -203,7 +231,7 @@ patch_one_node() {
         warn "ERROR: could not inspect native dependencies in $elf"
         return 1
     }
-    for lib in $MUSL_NEEDED_LIBS; do
+    for lib in $(node_needed_libs "$elf"); do
         printf '%s\n' "$needed" | command grep -qF "[$lib]" || \
             patchelf --add-needed "$lib" "$elf" || {
                 warn "ERROR: could not add $lib to $elf"
@@ -227,6 +255,12 @@ patch_musl_runtime() {
         warn "ERROR: could not install translator libraries into $dir"
         return 1
     }
+    if [ "$NEED_SPAWN_XLATE" = "1" ]; then
+        cp -f "$SPAWN_LIB" "$dir/" || {
+            warn "ERROR: could not install spawn compatibility library into $dir"
+            return 1
+        }
+    fi
 
     # EVERY musl .node in the dir needs this, not just runtime.node.
     # cli-native.node drives the TUI and imports pthread_mutexattr_* AND
@@ -235,6 +269,12 @@ patch_musl_runtime() {
     local rc=0 f
     for f in "$dir"/*.node; do
         [ -f "$f" ] || continue
+        if [ "$NEED_TLS_XLATE" = "1" ]; then
+            cp -f "$TLS_LIB" "$dir/libtls_xlate-$(basename "$f" .node).so" || {
+                warn "ERROR: could not install TLS compatibility library for $f"
+                return 1
+            }
+        fi
         patch_one_node "$f" || rc=1
     done
 
@@ -248,15 +288,25 @@ runtime_is_patched() {
     # for math imports such as cli-native.node's expf on bionic.
     local dir="$MUSL_PKG/prebuilds/linuxmusl-$ARCH_SUFFIX" f needed lib
     [ -f "$dir/runtime.node" ] || return 1
+    if [ "$NEED_SPAWN_XLATE" = "1" ]; then
+        cmp -s "$SPAWN_LIB" "$dir/libspawn_xlate.so" || return 1
+    fi
     for f in "$dir"/*.node; do
         [ -f "$f" ] || continue
         needed=$(readelf -d "$f" 2>/dev/null) || return 1
-        for lib in $MUSL_NEEDED_LIBS; do
+        for lib in $(node_needed_libs "$f"); do
             printf '%s\n' "$needed" | command grep -qF "[$lib]" || return 1
         done
+        if [ "$NEED_TLS_XLATE" = "1" ]; then
+            cmp -s "$TLS_LIB" "$dir/libtls_xlate-$(basename "$f" .node).so" || return 1
+        fi
         readelf --dyn-syms -W "$f" 2>/dev/null | command grep ' UND ' | awk '{print $8}' \
             | command grep -q -e '^pthread_mutexattr' -e '^pthread_condattr' \
                               -e '^atexit$' -e '^atexit@' -e '^sigaction$' -e '^sigaction@' && return 1
+        if [ "$NEED_SPAWN_XLATE" = "1" ]; then
+            readelf --dyn-syms -W "$f" 2>/dev/null | command grep ' UND ' \
+                | awk '$5 != "WEAK" {print $8}' | command grep -q '^posix_spawn' && return 1
+        fi
     done
     return 0
 }
@@ -331,6 +381,24 @@ for pair in "$SHIM_LIB:$SHIM_SRC" "$GAI_LIB:$GAI_SRC" "$PTH_LIB:$PTH_SRC"; do
         if [ "$lib" = "$SHIM_LIB" ]; then build_shim; else build_translator "$lib" "$src"; fi
     fi
 done
+
+if [ "$NEED_SPAWN_XLATE" = "1" ] && \
+   { [ ! -f "$SPAWN_LIB" ] || [ "$SPAWN_SRC" -nt "$SPAWN_LIB" ]; }; then
+    if ! build_translator "$SPAWN_LIB" "$SPAWN_SRC"; then
+        warn "ERROR: this Android libc lacks required spawn APIs and the compatibility library could not be built."
+        warn "       Run the full ./setup.sh from an updated clone to install spawn_xlate.c and clang."
+        exit 1
+    fi
+fi
+
+if [ "$NEED_TLS_XLATE" = "1" ] && \
+   { [ ! -f "$TLS_LIB" ] || [ "$TLS_SRC" -nt "$TLS_LIB" ]; }; then
+    if [ ! -f "$TLS_SRC" ] || ! clang -O2 -shared -fPIC -fvisibility=hidden \
+            -Wl,--exclude-libs,ALL -o "$TLS_LIB" "$TLS_SRC" -ldl; then
+        warn "ERROR: Android API $ANDROID_SDK needs the TLS bridge; run ./setup.sh from an updated clone."
+        exit 1
+    fi
+fi
 
 # --- mouse-scroll patch (Termux swipe -> wheel, not arrow keys) -----------
 #

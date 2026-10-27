@@ -76,6 +76,41 @@ if [ "$UPDATE_MODE" = true ]; then
   echo "═══════════════════════════════════════════════════════════"
   echo ""
 
+  SHIM_DIR="$HOME/.copilot-versions/shim"
+  SHIM_LIB="$SHIM_DIR/libbionic_shim.so"
+  SHIM_SRC="$SHIM_DIR/bionic_shim.c"
+  STRIP_PY="$SHIM_DIR/strip_verneed.py"
+  PATCH_JS_PY="$SHIM_DIR/patch_js.py"
+  LIBUNWIND="/data/data/com.termux/files/usr/lib/libunwind.a"
+
+  # Sync before version checks: an unchanged npm version can still need new
+  # compatibility fixes from this repo. The launcher builds them on next use.
+  mkdir -p "$SHIM_DIR"
+  for f in bionic_shim.c strip_verneed.py patch_js.py \
+           gai_xlate.c pthread_xlate.c rename_imports.py patch_mouse.py \
+           extract_sea.py spawn_xlate.c tls_xlate.c; do
+    if [ -f "$REPO_DIR/shim/$f" ] && { [ ! -f "$SHIM_DIR/$f" ] || ! cmp -s "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"; }; then
+      cp -f "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"
+      echo "✓ Synced $f from repo (your $f was stale or missing)"
+    fi
+  done
+  # Also refresh the wrapper from repo if it has drifted.
+  if [ -f "$REPO_DIR/scripts/copilot-wrapper.sh" ] && \
+     { [ ! -f "$HOME/.local/bin/copilot" ] || ! cmp -s "$REPO_DIR/scripts/copilot-wrapper.sh" "$HOME/.local/bin/copilot"; }; then
+    mkdir -p "$HOME/.local/bin"
+    cp -f "$REPO_DIR/scripts/copilot-wrapper.sh" "$HOME/.local/bin/copilot"
+    chmod +x "$HOME/.local/bin/copilot"
+    echo "✓ Refreshed launcher wrapper from repo"
+  fi
+  # Keep the interactive harness out of $PREFIX/tmp, which is wiped on restart.
+  if [ -f "$REPO_DIR/scripts/pty_tui_test.py" ] && \
+     { [ ! -f "$HOME/.copilot-versions/pty_tui_test.py" ] || \
+       ! cmp -s "$REPO_DIR/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"; }; then
+    cp -f "$REPO_DIR/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"
+    chmod +x "$HOME/.copilot-versions/pty_tui_test.py"
+    echo "✓ Installed TUI test harness (~/.copilot-versions/pty_tui_test.py)"
+  fi
+
   # `command grep` bypasses user shell aliases (e.g. ugrep, ripgrep) that don't
   # implement GNU grep's option parsing.
   OLD_VERSION=$(npm list -g @github/copilot 2>/dev/null | command grep copilot | sed 's/.*@//' || echo "unknown")
@@ -229,46 +264,6 @@ if [ "$UPDATE_MODE" = true ]; then
   # Both layouts need the LD_PRELOAD shim (libbionic_shim.so) at runtime to
   # provide bcmp, __xpg_strerror_r, __errno_location, __xstat64-family,
   # __assert_fail, __ctype_b_loc, and statically-linked _Unwind_*.
-
-  SHIM_DIR="$HOME/.copilot-versions/shim"
-  SHIM_LIB="$SHIM_DIR/libbionic_shim.so"
-  SHIM_SRC="$SHIM_DIR/bionic_shim.c"
-  STRIP_PY="$SHIM_DIR/strip_verneed.py"
-  PATCH_JS_PY="$SHIM_DIR/patch_js.py"
-  LIBUNWIND="/data/data/com.termux/files/usr/lib/libunwind.a"
-
-  # ---- Sync shim sources from repo (so `git pull && ./setup.sh --update` picks
-  #      up new symbol forwarders when upstream copilot adds glibc probes) ----
-  mkdir -p "$SHIM_DIR"
-  # gai_xlate.c/pthread_xlate.c/rename_imports.py are what fix the 1.0.61+ and
-  # TUI segfaults - without them the wrapper cannot self-heal at all.
-  for f in bionic_shim.c strip_verneed.py patch_js.py \
-           gai_xlate.c pthread_xlate.c rename_imports.py patch_mouse.py \
-           extract_sea.py; do
-    if [ -f "$REPO_DIR/shim/$f" ] && { [ ! -f "$SHIM_DIR/$f" ] || ! cmp -s "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"; }; then
-      cp -f "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"
-      echo "✓ Synced $f from repo (your $f was stale or missing)"
-    fi
-  done
-  # Also refresh the wrapper from repo if it has drifted.
-  if [ -f "$REPO_DIR/scripts/copilot-wrapper.sh" ] && \
-     { [ ! -f "$HOME/.local/bin/copilot" ] || ! cmp -s "$REPO_DIR/scripts/copilot-wrapper.sh" "$HOME/.local/bin/copilot"; }; then
-    mkdir -p "$HOME/.local/bin"
-    cp -f "$REPO_DIR/scripts/copilot-wrapper.sh" "$HOME/.local/bin/copilot"
-    chmod +x "$HOME/.local/bin/copilot"
-    echo "✓ Refreshed launcher wrapper from repo"
-  fi
-  # Interactive-TUI crash harness. Installed next to the shim dir, NOT in
-  # $PREFIX/tmp (wiped on restart - and a missing harness fails as an empty
-  # result line, which reads exactly like a pass). Needed to verify each new
-  # upstream version: the TUI segfault does not reproduce over piped stdin.
-  if [ -f "$REPO_DIR/scripts/pty_tui_test.py" ] && \
-     { [ ! -f "$HOME/.copilot-versions/pty_tui_test.py" ] || \
-       ! cmp -s "$REPO_DIR/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"; }; then
-    cp -f "$REPO_DIR/scripts/pty_tui_test.py" "$HOME/.copilot-versions/pty_tui_test.py"
-    chmod +x "$HOME/.copilot-versions/pty_tui_test.py"
-    echo "✓ Installed TUI test harness (~/.copilot-versions/pty_tui_test.py)"
-  fi
 
   # ---- Build / refresh the shim ----
   if ! command -v clang >/dev/null 2>&1; then
@@ -980,7 +975,7 @@ fi
 SYNCED=0
 for f in bionic_shim.c strip_verneed.py patch_js.py \
          gai_xlate.c pthread_xlate.c rename_imports.py patch_mouse.py \
-         extract_sea.py; do
+         extract_sea.py spawn_xlate.c tls_xlate.c; do
   if [ ! -f "$SHIM_DIR/$f" ] || ! cmp -s "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"; then
     cp -f "$REPO_DIR/shim/$f" "$SHIM_DIR/$f"
     SYNCED=$((SYNCED+1))

@@ -2,8 +2,9 @@
 
 Run **GitHub Copilot CLI** (`@github/copilot`) natively on Android via [Termux](https://termux.dev) — no root required.
 
-**This fork supports Copilot CLI 1.0.98** (latest stable as of October 15, 2026)
-and has been adapted for **Xiaomi 17 Pro**.
+**This fork supports Copilot CLI 1.0.103**. It retains the **Xiaomi 17 Pro**
+adaptation and includes native-startup fixes verified on an **ARM64 Android 8.1
+e-reader**.
 
 ## The Problem
 
@@ -40,6 +41,8 @@ This repo provides a single `setup.sh` that:
 | 1.0.48+ JS throws "Unsupported platform" | `patch_js.py` rewrites the `default:throw` in `index.js`+`app.js` to fall through |
 | musl/glibc symbols missing on bionic | LD_PRELOAD shim exports `bcmp`, `__xpg_strerror_r`, `__errno_location`, `__xstat64`/`__lxstat64`/`__fxstat64`/`__fxstatat64`, `__ctype_b_loc`, `__assert_fail`, and statically-linked `_Unwind_*` (from Termux `libunwind.a`) |
 | `pthread_mutexattr_t`/`pthread_condattr_t` are 8 bytes on bionic, 4 on musl | `.dynstr` import rename + `libpthread_xlate.so`, applied to **every** `*.node` (`runtime.node` and `cli-native.node`) |
+| Older Android lacks required `posix_spawn*` APIs | Probe libc; rename the addon's spawn imports to a scoped `libspawn_xlate.so` backport when needed |
+| Android before API 29 ignores ARM64 ELF TLS descriptors | Per-addon `libtls_xlate-*.so` initializes local descriptors using compiler-rt emulated thread-local storage before addon constructors |
 | No CA trust store on Android, so all HTTPS fails at client-build time | Wrapper exports `SSL_CERT_FILE=$PREFIX/etc/tls/cert.pem` |
 | npm update wipes all patches | Self-healing wrapper at `~/.local/bin/copilot` re-applies on launch |
 
@@ -86,7 +89,7 @@ cd ~/copilot-termux  # or wherever you cloned
 ```
 
 This will:
-1. Check if a newer version is available (skips if already latest)
+1. Refresh shim sources and the launcher, then check for a newer version (skips npm installation if already latest)
 2. Back up `pty.node` to `~/.copilot-termux-backups/`
 3. Run `npm update -g @github/copilot --force`
 4. Restore `pty.node` to `prebuilds/android-arm64/`
@@ -146,6 +149,42 @@ detects this directory automatically, including Termux's default
 ```
 
 ## Troubleshooting
+
+### `posix_spawnattr_init` missing, or startup crashes on Android 8
+
+This is a native Android compatibility issue, not a failed SEA extraction.
+Basic spawn APIs arrived in Android API 28, while the required chdir file action
+arrived in API 34. The wrapper checks the actual exports and backports the whole
+spawn API family used by the addon, keeping its opaque objects on one provider.
+It does not replace Node's or other Termux programs' libc calls.
+
+Android before API 29 also lacks native ELF thread-local storage (TLS, unrelated
+to HTTPS). After fixing spawn, this can cause a null-descriptor crash while
+loading `cli-native.node`. The ARM64 bridge handles the local TLS descriptors
+used by Copilot 1.0.103, with a separate dependency for each addon so constructors
+also work when `runtime.node` loads later. Unsupported relocation layouts fail
+with a diagnostic rather than silently continuing.
+
+From an existing, otherwise healthy installation:
+
+```bash
+cd ~/copilot-termux
+git pull --ff-only
+./setup.sh --update
+copilot --version
+```
+
+Setup synchronizes the new shim sources and launcher even when the installed
+Copilot version is already current. The next launch builds the needed libraries
+and refreshes cached addon copies. Modern Android does not enable the TLS bridge;
+devices with all required spawn exports keep their native spawn implementation.
+
+Copilot 1.0.103 version reporting and interactive rendering up to the folder
+trust prompt were verified on Android 8.1 (API 27); the prompt was not accepted
+and no chat request was sent. Run `bash scripts/test_native_compat.sh` in Termux
+to check spawn behavior, addon TLS constructors, alignment and thread/module
+isolation without starting Copilot. Offline launcher/install regressions:
+`bash scripts/test_wrapper_paths.sh` and `bash scripts/test_setup_paths.sh`.
 
 ### Python setup: `cannot get content of python` / `python-pip`
 
